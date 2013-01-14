@@ -1,5 +1,5 @@
-#! /usr/bin/env python3
-#
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 # Copyright (c) 2013 Gianni Vialetto, http://www.rootcube.net
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -39,20 +39,20 @@ def verbose_print(message, verbosity, min_verbosity=1):
     if verbosity >= min_verbosity:
         print(message)
 
-def imap_fatal(mail, result, step=''):
+def imap_fatal(mail, result, message):
     """
     check for imap command result
 
     params:
     - mail: an imap object from imaplib.IMAP4*
     - result: the result of the imap function
-    - step: optional 'step' arguments for description
+    - message: description of error
 
     """
     if result == 'OK':
         return True
 
-    print("FATAL ERROR: %s" % step)
+    print('FATAL ERROR: %s' % message)
     imap_logout(mail)
     sys.exit(1)
 
@@ -66,18 +66,21 @@ def imap_login(user, password,
     try:
         m = imaplib.IMAP4_SSL(host, port) if ssl else imaplib.IMAP4(host, port)
         
-        verbose_print("Connection to %s established." % host,
+        verbose_print('Connection to %s established.' % host,
             verbose)
         
         result, data = m.login(user, password)
-        imap_fatal(m, result, "login failed.")
+        imap_fatal(m, result, 'login failed. Check your username/password')
 
-        verbose_print("Login done.", verbose)
+        verbose_print('Login done.', verbose)
                        
         return m
+    except OSError as e:
+        print('connection failed: check your network or the IMAP server name')
+        sys.exit(1)
     except Exception as e:
-        m.logout()
-        imap_fatal("connection failed: %s" % e)
+        print("connection failed: %s" % e)
+        sys.exit(1)
 
 def imap_logout(mail):
     mail.close()
@@ -108,7 +111,7 @@ def spam_check(mail,
 
     for box, res in zip(boxes, results):
         if not res:
-            verbose_print("%s: 0 spam messages found" % box, 
+            verbose_print('%s: 0 spam messages found' % box, 
                           verbose)
             continue
         
@@ -140,7 +143,7 @@ def get_mailbox_uids(mail, box, only_unread=True, verbose=0):
 
     result, data = mail.uid('search', 
                             None, 
-                            "UNSEEN" if only_unread else "ALL")
+                            'UNSEEN' if only_unread else 'ALL')
     if result != 'OK':
         verbose_print('cannot get info from mailbox %s' % box,
                       verbose, 1)
@@ -166,7 +169,7 @@ def check_mailbox(tpe, mail, uid_list):
                    (x[1] for x in data if isinstance(x, tuple)))
 
 def do_spamcheck(uid, mail_raw):
-    p = subprocess.Popen(["spamc", "-c"], 
+    p = subprocess.Popen(['spamc', '-c'], 
                           stdin=subprocess.PIPE, 
                           stdout=subprocess.PIPE)
     try:
@@ -215,6 +218,7 @@ def spam_learn(mail, spam_dir='Spam', workers=5, verbose=0):
                       % len([x for x in l if x == True]))
 
 def do_spamlearn(uid, mail_raw):
+    # This needs that spamd is started with the --allow-tell option
     p = subprocess.Popen(['spamc', '--learntype=spam'], 
                          stdin=subprocess.PIPE, 
                          stdout=subprocess.PIPE)
@@ -225,8 +229,7 @@ def do_spamlearn(uid, mail_raw):
 
     code = p.returncode
     if code == 69 or code == 74:
-        print("Could not learn UID %s. Error connecting to spamd." % uid)
-        print(out)
+        print('Could not learn UID %s. Error connecting to spamd.' % uid)
         return False
 
     p.stdin.close()
