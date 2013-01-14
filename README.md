@@ -1,11 +1,12 @@
 IMAP-CHECKER
 ============
 
-I was a little fed up with spam storm regularly filling my work mail, 
-so i hacked this up to keep it at bay. 
+I was a little fed up with spam storms regularly filling my work mail, 
+so i hacked this little script up to keep it at bay. 
 
 Please see LICENSE for the license. Nothing restrictive (not worth it for a
 little script i believe) but the third paragraph is *always* worth mentioning.
+No warranty whatsoever, if your mail disappear it's not my fault. :)
 
 Dependencies
 ------------
@@ -16,7 +17,8 @@ Dependencies
 How to use
 ----------
 
-Kill spam in your inbox (unread mail only, useful mainly in crontab)
+Kill spam in your inbox (unread mail only, useful mainly in crontab - yes i know it's not good 
+at all for security, but this is made to run on your own laptop/pc, so...)
      
      $ imap-checker -s <server> -u <user> -w <password> --ssl
 
