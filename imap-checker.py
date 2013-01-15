@@ -26,7 +26,7 @@ import email
 import sys
 import subprocess
 import concurrent.futures as cf
-from argparse import ArgumentParser
+from argparse import ArgumentParser, RawDescriptionHelpFormatter
 
 # =============================================================================
 # LOGGING FUNCTIONS
@@ -157,7 +157,6 @@ def get_mailbox_uids(mail, box, only_unread=True, verbose=0):
     return data
 
 def check_mailbox(tpe, mail, uid_list):
-    # build a string to fetch multiple mails with the same command
     # RFC822.PEEK enable us to look at mails without marking them as read
     result, data = mail.uid('fetch', b','.join(uid_list), '(RFC822.PEEK)')
     # data as a result of multiple UID command is a list of 
@@ -218,7 +217,7 @@ def spam_learn(mail, spam_dir='Spam', workers=5, verbose=0):
                       % len([x for x in l if x == True]))
 
 def do_spamlearn(uid, mail_raw):
-    # This needs that spamd is started with the --allow-tell option
+    # This needs spamd started with the --allow-tell option
     p = subprocess.Popen(['spamc', '--learntype=spam'], 
                          stdin=subprocess.PIPE, 
                          stdout=subprocess.PIPE)
@@ -239,18 +238,126 @@ def do_spamlearn(uid, mail_raw):
     return True
 
 # =============================================================================
+# Config parsing
+# =============================================================================
+
+def config_check_args(args):
+    if not args.config:
+        # args.config not specified in options
+        if not args.user or not args.password or not args.server:
+            print('error: config file (-c/--config) or one or more ' \
+                      'required arguments ' \
+                      '(-s/--server, -u/--user, -w/--password) not specified.')
+            return None
+        
+        return False
+    else:
+        if args.user or args.password or args.server:
+            print('error: both config file (-c/--config) and one or more ' \
+                      'required arguments ' \
+                      '(-s/--server, -u/--user, -w/--password) specified.')
+            return None
+        return True
+
+def config_parse(args):
+   cfg_file = config_check_args(args)
+   if cfg_file == None:
+       # whhops, something is wrong with arguments
+       return None
+
+   if cfg_file:
+       conf = config_file(args.config)
+   else:
+       conf = { 'user': args.user, 'pass': args.password, 'host': args.server }
+   
+   if not conf:
+       return None
+
+   if args.ssl == True and args.port == imaplib.IMAP4_PORT:
+       port = imaplib.IMAP4_SSL_PORT
+   else:
+       port = args.port
+
+   return dict({
+           'port': port,
+           'ssl': args.ssl,
+           'boxes': args.mailboxes,
+           'spam-dir': args.spam_dir,
+           'method': args.method,
+           'all-mail': args.all_mail}, **conf)
+   
+def config_file(path):
+    import os
+    import configparser
+
+    try:
+        if path == 'default':
+            d = os.environ.get('XDG_CONFIG_HOME')
+            if not d: raise IOError                
+            path = '%s/imap-checker/config' % d
+            
+        if not os.path.isfile(path): raise IOError
+        with open(path) as f: pass
+    except IOError as e:
+        print('ERROR: config file \'%s\' not found. Aborting.' % path)
+        return None
+
+    cp = configparser.ConfigParser()
+    cp.read(path)
+    d = {}
+    
+    if len(cp.sections()) != 1:
+        print('ERROR: config file contains a number of sections that' \
+                  'differs from one. Aborting.')
+        return None
+
+    srv = cp.sections()[0]
+    d['host'] = srv
+
+    if not set(['user', 'password']) <= set(cp.options(srv)):
+        print('ERROR: option \'user\' and \'password\' are REQUIRED in ' \
+                  'config file for IMAP server %s. Please check your ' \
+                  'config.' % srv)
+        return None
+    d['user'] = cp[srv]['user']
+    d['pass'] = cp[srv]['password']
+
+    if 'domain' in cp[srv]: d['user'] = '%s/%s' % (cp[srv]['domain'], 
+                                                   d['user'])
+    if 'port' in cp[srv]: d['port'] = int(cp[srv]['port'])
+    if 'ssl' in cp[srv]: d['ssl'] = cp[srv].getboolean('ssl')
+    if 'boxes' in cp[srv]: d['boxes'] = ['INBOX'] + cp[srv]['boxes'].split(',')
+    if 'all-mail' in cp[srv]: d['all-mail'] = cp[srv].getboolean('all-mail')
+    if 'spam-dir' in cp[srv]: d['spam-dir'] = cp[srv]['spam-dir']
+
+    return d
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
 # unfortunately, we need this
 
 def main(argc, argv):
-    p = ArgumentParser(description=
-                   """Detects & deletes spam 
-                   from uncooperative exchange servers""")
+    p = ArgumentParser(formatter_class=RawDescriptionHelpFormatter,
+                       description='Detects & deletes spam ' \
+                           'from IMAP servers',
+                       epilog='Those a little paranoid (or using this script ' \
+                           'on multiuser systems) can\nuse-c to pass the ' \
+                           'command line options in an .ini config file ' \
+                           'with the\nfollowing format: \n\n' \
+                           '\t[<server hostname>]\n' \
+                           '\tuser: <user>\n' \
+                           '\tpassword: <password>\n' \
+                           '\tdomain: <domain (for exchange servers)>\n' \
+                           '\tport: <port number>\n' \
+                           '\tssl: <true/false>\n' \
+                           '\tboxes: <boxes>\n' \
+                           '\tspam-dir: <spam directory>\n' \
+                           '\tall-mail: <true/false>')
     srv = p.add_argument_group('server')
     srv.add_argument('-s', '--server', 
-                     required=True,
+                     default='',
                      help='the target imap server')
     srv.add_argument('-p', '--port', 
                      default=imaplib.IMAP4_PORT,
@@ -262,10 +369,10 @@ def main(argc, argv):
                          'Default: false')
     auth = p.add_argument_group('authentication')
     auth.add_argument('-u', '--user',
-                      required=True,
+                      default='',
                       help='the user for imap auth')
     auth.add_argument('-w', '--password', 
-                      required=True,
+                      default='',
                       help='the password for imap auth')
     opt = p.add_argument_group('options')
     opt.add_argument('-l', '--learn',
@@ -293,37 +400,44 @@ def main(argc, argv):
                      help='check every mail in the mailbox, not only unread' \
                          ' mails. Default: false')
     opt.add_argument('--workers',
-                     action='store',
                      type=int,
                      default=5,
                      help='the number of workers to use for spam checking. ' \
                          'Default: 5')
+    opt.add_argument('-c', '--config',
+                     nargs='?',
+                     type=str,
+                     default=None,
+                     const='default',
+                     help='an optional config file to be used instead of ' \
+                         'command line configuration. Default: ' \
+                         '$XDG_CONFIG_HOME/imap-checker/config')
     opt.add_argument('-v', '--verbose',
                      action='count',
                      default=0,
                      help='verbosity level (use more than once to increase)')
                      
     args = p.parse_args(argv)
+              
+    conf = config_parse(args)
+    if not conf:
+        return 1
 
-    # fix port if default + ssl
-    if args.ssl == True and args.port == imaplib.IMAP4_PORT:
-        port = imaplib.IMAP4_SSL_PORT
-    else:
-        port = args.port
-
-    mail = imap_login(args.user, args.password, 
-                      args.server, port, args.ssl,
+    print(conf)
+    mail = imap_login(conf['user'], conf['pass'], 
+                      conf['host'], conf['port'], conf['ssl'],
                       args.verbose)
     if not args.learn:
-        spam_check(mail, args.method,
-                   args.mailboxes, args.spam_dir, not args.all_mail, 
+        spam_check(mail, conf['method'],
+                   conf['boxes'], conf['spam-dir'], not conf['all-mail'], 
                    args.verbose, args.workers)
     else:
-        spam_learn(mail, args.spam_dir, args.workers, args.verbose)
+        spam_learn(mail, conf['spam-dir'], args.workers, args.verbose)
 
     imap_logout(mail)
+    return 0
 
 if __name__ == '__main__':
     # no need to pass the program name to main()
-    main(len(sys.argv)-1, sys.argv[1:])
+    sys.exit(main(len(sys.argv)-1, sys.argv[1:]))
         
