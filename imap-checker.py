@@ -339,20 +339,7 @@ def config_file(path):
 def main(argc, argv):
     p = ArgumentParser(formatter_class=RawDescriptionHelpFormatter,
                        description='Detects & deletes spam ' \
-                           'from IMAP servers',
-                       epilog='Those a little paranoid (or using this script ' \
-                           'on multiuser systems) can\nuse-c to pass the ' \
-                           'command line options in an .ini config file ' \
-                           'with the\nfollowing format: \n\n' \
-                           '\t[<server hostname>]\n' \
-                           '\tuser: <user>\n' \
-                           '\tpassword: <password>\n' \
-                           '\tdomain: <domain (for exchange servers)>\n' \
-                           '\tport: <port number>\n' \
-                           '\tssl: <true/false>\n' \
-                           '\tboxes: <boxes>\n' \
-                           '\tspam-dir: <spam directory>\n' \
-                           '\tall-mail: <true/false>')
+                           'from IMAP servers')
     srv = p.add_argument_group('server')
     srv.add_argument('-s', '--server', 
                      default='',
