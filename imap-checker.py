@@ -202,7 +202,7 @@ def spam_learn(mail, spam_dir='Spam', workers=5, verbose=0):
             return
     
         uid_list = data[0].split() 
-        result, data = mail.uid('fetch', b','.join(uid_list), '(RFC822.PEEK)')
+        result, data = mail.uid('fetch', b','.join(uid_list), '(RFC822)')
         if result != 'OK':
             print('Cannot get fetch mails from mailbox %s. Aborting.' % spam_dir)
             return       
@@ -218,24 +218,22 @@ def spam_learn(mail, spam_dir='Spam', workers=5, verbose=0):
 
 def do_spamlearn(uid, mail_raw):
     # This needs spamd started with the --allow-tell option
-    p = subprocess.Popen(['spamc', '--learntype=spam'], 
+    p = subprocess.Popen(['spamc', '-L', 'spam'], 
                          stdin=subprocess.PIPE, 
                          stdout=subprocess.PIPE)
     try:
         out = p.communicate(mail_raw)[0]
     except:
         return False
-
     code = p.returncode
-    if code == 69 or code == 74:
-        print('Could not learn UID %s. Error connecting to spamd.' % uid)
+    if code == 69 or code == 74: # error connecting
         return False
-
-    p.stdin.close()
-    if out.strip() == 'Message was already un/learned':
+    if code == 5: # learned now
+        return True
+    if code == 6: # already learned
         return False
-
-    return True
+    # catch all not learned
+    return False
 
 # =============================================================================
 # Config parsing
