@@ -33,22 +33,10 @@ from argparse import ArgumentParser, RawDescriptionHelpFormatter
 # =============================================================================
 
 def verbose_print(message, verbosity, min_verbosity=1):
-    """
-    print a message if verbosity level is >= min_verbosity
-    """
     if verbosity >= min_verbosity:
         print(message)
 
 def imap_fatal(mail, result, message):
-    """
-    check for imap command result
-
-    params:
-    - mail: an imap object from imaplib.IMAP4*
-    - result: the result of the imap function
-    - message: description of error
-
-    """
     if result == 'OK':
         return True
 
@@ -96,7 +84,8 @@ def spam_check(mail,
                spam_dir='Spam',
                only_unread=True, 
                verbose=0,
-               workers=5):
+               workers=5,
+               threshold=4.5):
     # get uids for every mailbox and do a parallel check using the
     # spamassassin daemon/client
     with cf.ThreadPoolExecutor(max_workers=workers) as tpe:
@@ -104,68 +93,54 @@ def spam_check(mail,
         for box in boxes:
             uids = get_mailbox_uids(mail, box, only_unread, verbose)
             # let's optimize this a little if we have no messages
-            if not uids:
+            if uids:
+                results.append(check_mailbox(tpe, mail, uids, threshold))
+            else:
                 results.append([])
-                continue
-            results.append(check_mailbox(tpe, mail, uids))
-
     for box, res in zip(boxes, results):
         if not res:
-            verbose_print('%s: 0 spam messages found' % box, 
-                          verbose)
+            verbose_print('%s: 0 spam messages found' % box, verbose)
             continue
-        
         result, num = mail.select(mailbox=box)
         if result != 'OK':
-            verbose_print('cannot select mailbox %s.' % box,
-                          verbose, 0)  
+            verbose_print('cannot select mailbox %s.' % box, verbose, 0)  
             continue
-        
-        spam_uids = [x[0] for x in res if x[1] == True]
-        verbose_print('%s: %d spam messages found' % (box, len(spam_uids)),
-                      verbose)
-
-        if spam_uids:
-            uid_str = b','.join(spam_uids)
-            # move all the spam in "Spam" directory
-            if action == 'move':
-                mail.uid('copy', uid_str, spam_dir)
-
-            mail.uid('store', uid_str, '+FLAGS', '(\Deleted)')
-            mail.expunge()
+        verbose_print('%s: %d spam messages found' % (box, len(res)), verbose)
+        uid_str = b','.join(res)
+        # move all the spam in "Spam" directory
+        if action == 'move':
+            mail.uid('copy', uid_str, spam_dir)
+        mail.uid('store', uid_str, '+FLAGS', '(\Deleted)')
+        mail.expunge()
 
 def get_mailbox_uids(mail, box, only_unread=True, verbose=0):
     result, num = mail.select(mailbox=box)
     if result != 'OK':
-        verbose_print('cannot select mailbox %s' % box,
-                      verbose, 1)
+        verbose_print('cannot select mailbox %s' % box, verbose, 1)
         return []
-
     result, data = mail.uid('search', 
                             None, 
                             'UNSEEN' if only_unread else 'ALL')
     if result != 'OK':
-        verbose_print('cannot get info from mailbox %s' % box,
-                      verbose, 1)
+        verbose_print('cannot get info from mailbox %s' % box, verbose, 1)
         return []      
-    
     # get a list of UIDs
     data = data[0].split()
-    verbose_print('Found %d messages in %s' % (len(data), box),
-                  verbose)
-
+    verbose_print('Found %d messages in %s' % (len(data), box), verbose)
     return data
 
-def check_mailbox(tpe, mail, uid_list):
+def check_mailbox(tpe, mail, uid_list, threshold = 4.5):
     # RFC822.PEEK enable us to look at mails without marking them as read
     result, data = mail.uid('fetch', b','.join(uid_list), '(RFC822.PEEK)')
     # data as a result of multiple UID command is a list of 
     # <tuple>, <uid string>, <tuple>, <uid_string>, ...
     # we are only interested in the tuples (more precisely in the second
     # member of the tuple, which is the email in raw text (header+body)
-    return tpe.map(do_spamcheck, 
-                   uid_list, 
-                   (x[1] for x in data if isinstance(x, tuple)))
+    spam_data = tpe.map(do_spamcheck, 
+                        uid_list, 
+                        (x[1] for x in data if isinstance(x, tuple)))
+    return [x[0] for x in spam_data 
+            if x[1] == True or x[2] >= threshold]
 
 def do_spamcheck(uid, mail_raw):
     p = subprocess.Popen(['spamc', '-c'], 
@@ -173,15 +148,17 @@ def do_spamcheck(uid, mail_raw):
                           stdout=subprocess.PIPE)
     try:
         score = p.communicate(mail_raw)[0]
-    except:
+    except: # better safe than sorry
+        return (uid, False, 0.0)
+    if score == b'0/0\n': # spamc reports errors this way
+        return (uid, False, 0.0)
+    # binary strings do not support split(), so we need to decode
+    # the output of spamc after stripping it of ('\n)
+    score = float(score.strip().decode().split('/')[0])
+    if p.returncode == 0: # spamc return 0 for non spam...
         return (uid, False, score)
 
-    if score == '0/0\n':
-        return (uid, False, score)
-
-    if p.returncode == 0:
-        return (uid, False, score)
-
+    # ...and 1 for spam. But who cares?
     return (uid, True, score)
 
 # =============================================================================
@@ -282,7 +259,8 @@ def config_parse(args):
            'boxes': args.mailboxes,
            'spam-dir': args.spam_dir,
            'method': args.method,
-           'all-mail': args.all_mail}, **conf)
+           'all-mail': args.all_mail,
+           'threshold': args.threshold}, **conf)
    
 def config_file(path):
     import os
@@ -327,6 +305,7 @@ def config_file(path):
     if 'boxes' in cp[srv]: d['boxes'] = ['INBOX'] + cp[srv]['boxes'].split(',')
     if 'all-mail' in cp[srv]: d['all-mail'] = cp[srv].getboolean('all-mail')
     if 'spam-dir' in cp[srv]: d['spam-dir'] = cp[srv]['spam-dir']
+    if 'threshold' in cp[srv]: d['threshold'] = cp[srv]['threshold']
 
     return d
 
@@ -360,6 +339,12 @@ def main(argc, argv):
                       default='',
                       help='the password for imap auth')
     opt = p.add_argument_group('options')
+    opt.add_argument('-t', '--threshold',
+                     action='store',
+                     default=4.5,
+                     type=float,
+                     help='when detecting spam, set minimum spam score' \
+                         'to this value (default: %(default)')
     opt.add_argument('-l', '--learn',
                      action='store_true',
                      default=False,
@@ -403,19 +388,17 @@ def main(argc, argv):
                      help='verbosity level (use more than once to increase)')
                      
     args = p.parse_args(argv)
-              
     conf = config_parse(args)
     if not conf:
         return 1
 
-    print(conf)
     mail = imap_login(conf['user'], conf['pass'], 
                       conf['host'], conf['port'], conf['ssl'],
                       args.verbose)
     if not args.learn:
         spam_check(mail, conf['method'],
                    conf['boxes'], conf['spam-dir'], not conf['all-mail'], 
-                   args.verbose, args.workers)
+                   args.verbose, args.workers, conf['threshold'])
     else:
         spam_learn(mail, conf['spam-dir'], args.workers, args.verbose)
 

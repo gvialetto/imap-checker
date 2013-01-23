@@ -41,6 +41,7 @@ command line as parameters):
      ssl: <enable ssl or not, defaults to disabled>
      boxes: <additional IMAP mailboxes to be checked>
      all-mail: <check everything, not only unread emails>
+     treshold: <consider spam every mail above this rating (default: 4.5)>
 
 Modes
 -----
